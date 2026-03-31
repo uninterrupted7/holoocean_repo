@@ -16,10 +16,20 @@ HoloOcean (Python)
         ├── DVLSensor       ──► /holoocean/dvl/velocity  [geometry_msgs/TwistStamped]
         └── PoseSensor      ──► /holoocean/odom          [nav_msgs/Odometry]
                             ──► /holoocean/pose          [geometry_msgs/PoseStamped]
-                            ──► TF: world → base_link → sonar_link
+                            ──► /holoocean/vessel_marker [visualization_msgs/Marker]
+                            ──► TF: world → base_link
 
 ROS2 ──► /holoocean/cmd_vel  [geometry_msgs/Twist]  ──► SurfaceVessel thrusters
 ```
+
+---
+
+## Features
+
+- **Autonomous mode**: Built-in autonomous path pattern (forward → left → backward → right)
+- **Sonar visualization**: PointCloud2 in vessel-relative frame (base_link)
+- **Vessel markers**: RViz visualization with cube + arrow showing position/heading
+- **Multiple sensors**: IMU, GPS, DVL, Pose all bridged to ROS2
 
 ---
 
@@ -27,7 +37,6 @@ ROS2 ──► /holoocean/cmd_vel  [geometry_msgs/Twist]  ──► SurfaceVesse
 
 ### 1. Ubuntu 22.04 + ROS2 Humble
 ```bash
-# If not already installed:
 sudo apt install ros-humble-desktop python3-colcon-common-extensions
 ```
 
@@ -43,7 +52,8 @@ sudo apt install \
   ros-humble-tf2-ros \
   ros-humble-sensor-msgs \
   ros-humble-nav-msgs \
-  ros-humble-geometry-msgs
+  ros-humble-geometry-msgs \
+  ros-humble-visualization-msgs
 ```
 
 ---
@@ -55,8 +65,8 @@ sudo apt install \
 mkdir -p ~/ros2_ws/src
 cd ~/ros2_ws/src
 
-# 2. Copy the package here
-cp -r /path/to/holoocean_ros2_bridge .
+# 2. Clone or copy the package
+git clone https://github.com/YOUR_USERNAME/holoocean_ros2_bridge.git
 
 # 3. Build
 cd ~/ros2_ws
@@ -69,99 +79,126 @@ source install/setup.bash
 
 ## Running
 
-### Terminal 1 – Launch bridge (simulation + publishers)
+### Launch Options
+
 ```bash
 source ~/ros2_ws/install/setup.bash
 
-# Using the bundled JSON scenario:
+# Basic launch (manual control)
 ros2 launch holoocean_ros2_bridge bridge.launch.py
 
-# With RViz2:
-ros2 launch holoocean_ros2_bridge bridge.launch.py use_rviz:=true
+# With autonomous movement (forward 5s → left 5s → backward 5s → right 5s)
+ros2 launch holoocean_ros2_bridge bridge.launch.py auto_mode:=true
 
-# With a custom scenario file:
+# With custom scenario file
 ros2 launch holoocean_ros2_bridge bridge.launch.py \
     scenario_file:=/path/to/my_scenario.json
-
-# With real GPS coordinates origin:
-ros2 launch holoocean_ros2_bridge bridge.launch.py \
-    lat_origin:=37.5665 lon_origin:=126.9780
 ```
 
-### Terminal 2 – Keyboard teleop
+### Launch Arguments
+
+| Argument | Default | Description |
+|----------|---------|-------------|
+| `scenario_file` | `config/surface_mapping_scenario.json` | Path to HoloOcean scenario JSON |
+| `auto_mode` | `false` | Enable autonomous movement pattern |
+| `thrust_scale` | `50.0` | Thrust multiplier for vessel control |
+| `sonar_intensity_threshold` | `0.1` | Minimum intensity for sonar points |
+
+### Keyboard Teleop (when auto_mode:=false)
+
 ```bash
-source ~/ros2_ws/install/setup.bash
 ros2 run holoocean_ros2_bridge vessel_teleop
-# w/s = forward/back   a/d = turn   SPACE = stop   q = quit
 ```
 
-### Terminal 3 – Check topics
-```bash
-ros2 topic list
-ros2 topic hz /holoocean/sonar/points   # should see ~5 Hz
-ros2 topic hz /holoocean/imu            # should see ~50 Hz
-ros2 topic echo /holoocean/gps
-```
+**Controls:**
+- `w` - Toggle forward
+- `s` - Toggle backward
+- `a` - Toggle left turn
+- `d` - Toggle right turn
+- `SPACE` - Stop
+- `q` - Quit
 
 ---
 
-## Sensor → ROS2 Message Reference
+## Topics
 
-| HoloOcean Sensor | Topic | ROS2 Type | Frame |
-|------------------|-------|-----------|-------|
-| `ProfilingSonar` | `/holoocean/sonar/points` | `sensor_msgs/PointCloud2` | `sonar_link` |
-| `ProfilingSonar` | `/holoocean/sonar/image` | `sensor_msgs/Image` (mono8) | `sonar_link` |
-| `IMUSensor` | `/holoocean/imu` | `sensor_msgs/Imu` | `imu_link` |
-| `GPSSensor` | `/holoocean/gps` | `sensor_msgs/NavSatFix` | `gps_link` |
-| `DVLSensor` | `/holoocean/dvl/velocity` | `geometry_msgs/TwistStamped` | `base_link` |
-| `PoseSensor` | `/holoocean/odom` | `nav_msgs/Odometry` | `world` |
-| `PoseSensor` | `/holoocean/pose` | `geometry_msgs/PoseStamped` | `world` |
-| TF | — | TF tree | `world→base_link→sonar_link` |
+| Topic | Type | Frame | Description |
+|-------|------|-------|-------------|
+| `/holoocean/sonar/points` | `sensor_msgs/PointCloud2` | `base_link` | Sonar points (relative to vessel) |
+| `/holoocean/sonar/image` | `sensor_msgs/Image` | `base_link` | Raw sonar intensity |
+| `/holoocean/imu` | `sensor_msgs/Imu` | `imu_link` | IMU data |
+| `/holoocean/gps` | `sensor_msgs/NavSatFix` | `gps_link` | GPS coordinates |
+| `/holoocean/dvl/velocity` | `geometry_msgs/TwistStamped` | `base_link` | DVL velocity |
+| `/holoocean/odom` | `nav_msgs/Odometry` | `world` | Ground truth pose |
+| `/holoocean/pose` | `geometry_msgs/PoseStamped` | `world` | Ground truth pose |
+| `/holoocean/vessel_marker` | `visualization_msgs/Marker` | `base_link` | Vessel visual |
 
-### PointCloud2 field layout (sonar)
+### PointCloud2 Format
+
 | Field | Type | Description |
 |-------|------|-------------|
-| `x` | float32 | along-track (vessel forward) |
-| `y` | float32 | across-track (port←→starboard) |
-| `z` | float32 | depth (positive downward) |
-| `intensity` | float32 | sonar return intensity 0–1 |
+| `x` | float32 | Across-track (starboard positive) |
+| `y` | float32 | Along-track (forward positive) |
+| `z` | float32 | Depth (negative = below vessel in ENU) |
+| `intensity` | float32 | Sonar return intensity 0–1 |
 
 ---
 
-## ProfilingSonar Configuration
+## RViz Visualization
 
-The scenario JSON configures the sonar. Key parameters:
+```bash
+# Launch with RViz
+ros2 launch holoocean_ros2_bridge bridge.launch.py use_rviz:=true
 
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `Azimuth` | 120° | Total swath width angle |
-| `Elevation` | 1° | Along-track beam width |
-| `RangeMin` | 0.5 m | Minimum measurable range |
-| `RangeMax` | 50.0 m | Maximum measurable range |
-| `RangeBins` | 256 | Range resolution |
-| `AzimuthBins` | 128 | Number of beams across swath |
-| `AddSigma` | 0.05 | Additive noise |
-| `MultSigma` | 0.05 | Multiplicative noise |
+# Or run RViz separately
+rviz2 -d ~/ros2_ws/src/holoocean_ros2_bridge/rviz/mapping.rviz
+```
 
-Increase `RangeBins`/`AzimuthBins` for higher resolution (at compute cost).
+The RViz config sets:
+- Fixed frame: `base_link`
+- Grid on XZ plane
+- Sonar PointCloud with intensity coloring
+- Vessel markers (cube + arrow)
+
+---
+
+## Configuration
+
+Edit `config/surface_mapping_scenario.json`:
+
+```json
+{
+    "name": "SurfaceVessel-Mapping",
+    "world": "PierHarbor",
+    "ticks_per_sec": 30,
+    "agents": [{
+        "agent_type": "SurfaceVessel",
+        "location": [0.0, 0.0, -1.0],
+        "sensors": [
+            {"sensor_type": "ProfilingSonar", "Hz": 10, ...},
+            {"sensor_type": "IMUSensor", "Hz": 30, ...},
+            {"sensor_type": "GPSSensor", "Hz": 5, ...},
+            {"sensor_type": "DVLSensor", "Hz": 10, ...},
+            {"sensor_type": "PoseSensor", "Hz": 30}
+        ]
+    }]
+}
+```
 
 ---
 
 ## Mapping Tools
 
-Once you have data flowing as ROS2 messages, you can use these tools:
-
-### Option A: OctoMap (3D occupancy map from PointCloud2)
+### OctoMap
 ```bash
 sudo apt install ros-humble-octomap-server ros-humble-octomap-rviz-plugins
 ros2 run octomap_server octomap_server_node \
-    --ros-args \
-    -p frame_id:=world \
+    -p frame_id:=base_link \
     -p resolution:=0.5 \
     -r cloud_in:=/holoocean/sonar/points
 ```
 
-### Option B: RTABMap (full SLAM with PointCloud2 + Odometry)
+### RTABMap
 ```bash
 sudo apt install ros-humble-rtabmap-ros
 ros2 launch rtabmap_ros rtabmap.launch.py \
@@ -172,40 +209,11 @@ ros2 launch rtabmap_ros rtabmap.launch.py \
     frame_id:=base_link
 ```
 
-### Option C: Simple PointCloud accumulation (record a bag and replay)
+### ROS Bag
 ```bash
-# Record
 ros2 bag record /holoocean/sonar/points /holoocean/odom /holoocean/gps
-
-# Replay for offline mapping
 ros2 bag play <bag_folder>
 ```
-
----
-
-## Coordinate Frames
-
-```
-world (fixed ENU frame)
-  └── base_link (vessel body, from PoseSensor 4×4 matrix)
-        └── sonar_link (sonar head, 30 cm below keel, pointing down)
-        └── imu_link   (IMU, co-located with base_link)
-        └── gps_link   (GPS, co-located with base_link)
-```
-
-**HoloOcean uses NED internally.** The bridge publishes in standard ROS ENU.
-If your mapping tool expects ENU and you see orientation issues, you may need
-to add an ENU↔NED rotation in the TF chain.
-
----
-
-## Customising the Scenario
-
-Edit `config/surface_mapping_scenario.json` to change:
-- World (`"world"`: e.g., `"PierHarbor"`, `"OpenWater"`)
-- Agent start position (`"location": [x, y, z]`)
-- Sonar parameters (range, azimuth width, noise)
-- Add more sensor types (e.g., RaycastLIDAR, RGBCamera)
 
 ---
 
@@ -214,19 +222,17 @@ Edit `config/surface_mapping_scenario.json` to change:
 **HoloOcean env fails to start:**
 ```bash
 python -c "import holoocean; print(holoocean.__version__)"
-# Should print 2.3.0
 python -c "import holoocean; holoocean.install('Ocean')"
 ```
 
-**No sonar points published:**
-- Check `sonar_intensity_threshold` parameter (lower it, e.g., `0.01`)
-- Verify sonar socket exists on the agent in the scenario
-- The octree needs to initialise (may take a few ticks)
+**Vessel not moving:**
+- Check `thrust_scale` parameter (default 50.0)
+- Use `auto_mode:=true` to test autonomous movement
+
+**No sonar points:**
+- Vessel must be underwater (z < 0)
+- Check `sonar_intensity_threshold` (try 0.01)
 
 **TF errors in RViz:**
-- Ensure `bridge.launch.py` is running (it publishes TF)
+- Ensure launch is running
 - Check `ros2 run tf2_tools view_frames`
-
-**Low sonar frame rate:**
-- Reduce `RangeBins` and `AzimuthBins` in the scenario JSON
-- Reduce `InitOctreeRange`
